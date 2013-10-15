@@ -1,0 +1,367 @@
+/*
+    I2CDriver.cogc - I2C single master bus driver.  Uses 1 cog to provide from 100 to
+    400 KHz I2C Bus.  COG operates each bus transaction from START to STOP.  Uses a 
+    mailbox/structure format to gather the needed data to process a transaction.  
+    Implements checks for slave clock stretching.
+*/
+
+#include "I2CDriver.h"
+
+/* minimum overhead per half cycle */
+#define MINIMUM_OVERHEAD    31
+
+/* set high by allowing the pin to float high, set low by forcing it low */
+#define i2c_float_scl_high() (DIRA &= ~scl_mask)
+#define i2c_set_scl_low()    (DIRA |= scl_mask)
+#define i2c_float_sda_high() (DIRA &= ~sda_mask)
+#define i2c_set_sda_low()    (DIRA |= sda_mask)
+
+
+/* i2c state information */
+static _COGMEM int scl_mask;
+static _COGMEM int sda_mask;
+static _COGMEM int half_cycle;
+static _COGMEM volatile I2C_MAILBOX *mailbox;
+
+static _NATIVE void     i2cStart(void);
+static _NATIVE void     i2cRepStart(void);
+static _NATIVE void     i2cStop(void);
+static _NATIVE int      i2cSendByte( uint8_t byte);
+static _NATIVE uint8_t  i2cReceiveByte(int acknowledge);
+//static  void     i2cStretchHold(void);
+
+_NAKED int main(void)
+{
+    I2C_INIT *init = (I2C_INIT *)PAR;
+    I2C_CMD cmd;
+    uint8_t *p;
+    uint32_t count;
+    int reg;
+    uint8_t regBytes[2];
+    
+    /* get the COG initialization parameters */
+    scl_mask    = 1 << init->scl;
+    sda_mask    = 1 << init->sda;
+    half_cycle  = init->ticks_per_cycle >> 1;
+    mailbox     = init->mailbox;
+    
+    /* make sure the delta doesn't get too small */
+    if (half_cycle > MINIMUM_OVERHEAD)
+        half_cycle -= MINIMUM_OVERHEAD;
+    
+    /* tell the caller that we're done with initialization */
+    mailbox->cmd = I2C_CMD_IDLE;
+    
+    /* initialize the i2c pins */
+    DIRA &= ~scl_mask;
+    DIRA &= ~sda_mask;
+    OUTA &= ~scl_mask;
+    OUTA &= ~sda_mask;
+    
+    /* handle requests */
+    for (;;) 
+    {
+        uint32_t sts;
+    
+        /* wait for the next request */
+        while ((cmd = mailbox->cmd) == I2C_CMD_IDLE)
+            ;
+        
+        /* dispatch on the command code */
+        switch (cmd) 
+        {                           
+            case I2C_CMD_SEND:
+                p     = mailbox->buffer;
+                count = mailbox->reg_count;
+                sts   = I2C_OK;
+                
+                regBytes[1] = (uint8_t)(mailbox->reg  >> 8);
+                regBytes[0] = (uint8_t)(mailbox->reg);  
+                
+                i2cStart();                                 // START Bit
+                if (i2cSendByte(mailbox->hdr) != 0)         // Write Address
+                {    
+                    sts = I2C_ERR_SEND_HDR;
+                    i2cStop();
+                }
+                
+                if (sts == I2C_OK)
+                {
+                    while (count > 0)                       // Write register value
+                    {                                       // High byte first 
+                        if (i2cSendByte(regBytes[count-1]) != 0)     
+                        {
+                            sts = I2C_ERR_SEND_HDR;
+                            i2cStop();
+                            break;
+                        }
+                        --count;
+                    }
+                }
+                                                 
+                if (sts == I2C_OK)                          // If all header data sent correctly
+                {   
+                    count = mailbox->count;                 // Reset the count to the data buffer count          
+                    while (count > 0) 
+                    {
+                        if (i2cSendByte(*p++) != 0)         // Write data bytes
+                        {
+                            sts = I2C_ERR_SEND;
+                            i2cStop();
+                            break;
+                        }
+                        --count;
+                    }
+                }
+               
+                i2cStop();                                  // STOP bit
+                break;    
+                
+              
+            case I2C_CMD_RECEIVE:
+                p     = mailbox->buffer;
+                count = mailbox->reg_count;             // Set count to the register count
+                sts   = I2C_OK;
+                
+                regBytes[1] = (uint8_t)(mailbox->reg >> 8);
+                regBytes[0] = (uint8_t)(mailbox->reg);
+                                                
+                i2cStart();                             // START Bit
+                if (count > 0)                          // If there is a register value to write do it.
+                {                                       
+                    if (i2cSendByte(mailbox->hdr) != 0) // Send write Address   
+                    {
+                        sts = I2C_ERR_SEND_HDR;
+                        i2cStop();
+                        break;
+                    }
+                    
+                    if (sts == I2C_OK)
+                    {                                   // Write register value                
+                        while (count > 0)               // High byte first
+                        {                                
+                            if (i2cSendByte(regBytes[count-1]) != 0)     
+                            {
+                                sts = I2C_ERR_SEND_HDR;
+                                i2cStop();
+                                break;
+                            }
+                            --count;
+                        }
+                    }
+                    
+                    i2cRepStart();                      // Repeated Start
+                }
+                
+                if (sts == I2C_OK)
+                {
+                    mailbox->hdr |= I2C_READ;           // Change to read address 
+                    
+                    if (i2cSendByte(mailbox->hdr) != 0) // Write the read address
+                    {
+                        sts = I2C_ERR_SEND_HDR;
+                        i2cStop();
+                        break;
+                    }
+                }
+                
+                if (sts == I2C_OK)
+                {               
+                    count = mailbox->count;
+                    while (count > 0)                   // Receive data bytes
+                    {
+                        int byte = i2cReceiveByte(count != 1);
+                        if (byte < 0) 
+                        {
+                            sts = I2C_ERR_RECEIVE;
+                            i2cStop();
+                            break;
+                        }
+                        *p++ = byte;
+                        --count;
+                    }
+                }
+                
+                i2cStop();                              // STOP bit
+                break;
+                
+                
+            case I2C_CMD_LOCKED:
+                break;                                  
+                
+                
+            default:
+                sts = I2C_ERR_UNKNOWN_CMD;
+                break;
+        }
+        
+        mailbox->sts = sts;
+        mailbox->cmd = I2C_CMD_IDLE;
+    }
+    
+    return 0;
+}
+
+
+static _NATIVE void i2cStart(void)
+{/* Produce an I2C start bit. Assumes that SCL and SDA are 
+    high on entry */
+    i2c_set_sda_low();
+    waitcnt(CNT + half_cycle);
+    i2c_set_scl_low();
+}
+
+
+static _NATIVE void i2cRepStart(void)
+{/* Produce a repeated start bit without producing a stop bit. 
+    Assumes SCL and SDA are low on entry. */
+    i2c_float_sda_high();
+    waitcnt(CNT + half_cycle);
+    i2c_float_scl_high();
+    int tmout = 0; 
+    while(!(INA & scl_mask))
+    {
+        tmout++; 
+        if (tmout > 3000)
+            break;
+    }
+    waitcnt(CNT + half_cycle);
+    i2c_set_sda_low();
+    waitcnt(CNT + half_cycle);
+    i2c_set_scl_low();       
+}
+
+
+static _NATIVE void i2cStop(void)
+{/* Produce an I2C stop bit. Assumes SCL and SDA are low 
+    on entry */
+    waitcnt(CNT + half_cycle);
+    i2c_float_scl_high();
+    /* Check for clock stretch from slave device */
+    int tmout = 0; 
+    while(!(INA & scl_mask))
+    {
+        tmout++; 
+        if (tmout > 3000)
+            break;
+    }
+    i2c_float_sda_high();
+}
+
+
+static _NATIVE int i2cSendByte(uint8_t byte)
+{/* Send a single byte of I2C data and return the 9th ACK bit */
+
+    int count, result;
+    
+    /* send the byte, high bit first */
+    for (count = 8; --count >= 0; ) 
+    {
+        if (byte & 0x80)
+            i2c_float_sda_high();
+        else
+            i2c_set_sda_low();
+        waitcnt(CNT + half_cycle);
+        i2c_float_scl_high();
+        int tmout = 0; 
+        while(!(INA & scl_mask))
+        {
+            tmout++; 
+            if (tmout > 3000)
+                break;
+        }        
+        waitcnt(CNT + half_cycle);
+        i2c_set_scl_low();
+        byte <<= 1;
+    }
+    
+    /* receive the acknowledgement from the slave */
+    i2c_float_sda_high();
+    waitcnt(CNT + half_cycle);
+    i2c_float_scl_high();
+    int tmout = 0; 
+    while(!(INA & scl_mask))
+    {
+        tmout++; 
+        if (tmout > 3000)
+            break;
+    }
+    result = (INA & sda_mask) != 0;
+    waitcnt(CNT + half_cycle);
+    i2c_set_scl_low();
+    i2c_set_sda_low();
+    
+    return result;
+}
+
+
+static _NATIVE uint8_t i2cReceiveByte(int ack)
+{/* Receive a single byte of I2C data from the bus. [ack] is the
+    master's ACK bit to send to the slave for this byte */
+      
+    uint8_t byte = 0;
+    int count;
+    
+    i2c_float_sda_high();
+    
+    for (count = 8; --count >= 0; ) 
+    {
+        byte <<= 1;
+        waitcnt(CNT + half_cycle);
+        i2c_float_scl_high();
+        int tmout = 0; 
+        while(!(INA & scl_mask))
+        {
+            tmout++; 
+            if (tmout > 3000)
+                break;
+        }        
+        byte |= (INA & sda_mask) ? 1 : 0;
+        waitcnt(CNT + half_cycle);
+        i2c_set_scl_low();
+    }
+    
+    /* Do master acknowledge */
+    if (ack)
+        i2c_set_sda_low();
+    else
+        i2c_float_sda_high();
+    waitcnt(CNT + half_cycle);
+    i2c_float_scl_high();    
+    int tmout = 0; 
+    while(!(INA & scl_mask))
+    {
+        tmout++; 
+        if (tmout > 3000)
+            break;
+    }
+    waitcnt(CNT + half_cycle);
+    i2c_set_scl_low();
+    i2c_set_sda_low();
+    
+    return byte;
+}
+
+
+/*
+2012 Kyle Crane Modifications: 
+-Allow for sending to a register with repeated start.  
+-Allow for device clock stretching detection.
+
+Copyright (c) 2012 David Michael Betz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+and associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
