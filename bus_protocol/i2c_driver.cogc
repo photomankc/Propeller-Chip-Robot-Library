@@ -1,11 +1,11 @@
 /*
-    I2CDriver.cogc - I2C single master bus driver.  Uses 1 cog to provide from 100 to
-    400 KHz I2C Bus.  COG operates each bus transaction from START to STOP.  Uses a 
-    mailbox/structure format to gather the needed data to process a transaction.  
-    Implements checks for slave clock stretching.
-*/
+ *   I2CDriver.cogc - I2C single master bus driver.  Uses 1 cog to provide from 100 to
+ *   400 KHz I2C Bus.  COG operates each bus transaction from START to STOP.  Uses a
+ *   mailbox/structure format to gather the needed data to process a transaction.
+ *   Implements checks for slave clock stretching.
+ */
 
-#include "I2CDriver.h"
+#include "i2c_driver.h"
 
 /* minimum overhead per half cycle */
 #define MINIMUM_OVERHEAD    31
@@ -75,7 +75,7 @@ _NAKED int main(void)
                 count = mailbox->reg_count;
                 sts   = I2C_OK;
                 
-                regBytes[1] = (uint8_t)(mailbox->reg  >> 8);
+                regBytes[1] = (uint8_t)(mailbox->reg>>8);
                 regBytes[0] = (uint8_t)(mailbox->reg);  
                 
                 i2cStart();                                 // START Bit
@@ -127,7 +127,7 @@ _NAKED int main(void)
                 regBytes[0] = (uint8_t)(mailbox->reg);
                                                 
                 i2cStart();                             // START Bit
-                if (count > 0)                          // If there is a register value to write do it.
+                if (count > 0)                          // Register needed?
                 {                                       
                     if (i2cSendByte(mailbox->hdr) != 0) // Send write Address   
                     {

@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+enum SPI_ERR
+{
+    ERR_SPI_NOT_IMPL    = -128
+};
+
 /** @brief Interface for SPI communication.
  *
  *  Device specfic SPI implementation should implement this interface to allow

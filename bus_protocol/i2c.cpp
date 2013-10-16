@@ -1,18 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////////
-// Class I2C -    Defines an interface to the I2C Bus Driver cog to allow easy access
-//                to I2C functions.  This object will start a COG to drive the I2C bus at
-//                high speed (100 to 400KHz).
-//
-//
-// (Based on work by David Michael Betz)
-//
-// Copyright Kyle Crane 2012.  See Bottom for License Terms
-////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
 #include <unistd.h>
-#include "I2C.h"
+#include "i2c.h"
 
 extern uint32_t _load_start_I2CDriver_cog[];
 extern uint32_t _load_stop_I2CDriver_cog[];
@@ -67,38 +54,42 @@ I2C::~I2C()
     {
     	cogstop(m_par.cog);
     	m_par.cog = -1;
+        m_ready = 0;
     }
 }
 
+int I2C::openBus(uint8_t slaveAdr)
+{
+    m_adr = slaveAdr;
+}
+
+int I2C::closeBus()
+{
+    m_adr = 0;
+    return m_adr;
+}
+
+int I2C::isReady()
+{
+    if (m_ready & m_adr)
+        return 1;
+    else
+        return 0;
+}
+
 int I2C::GetCog()
-{	// Returns the current COG that is driving the bus.  0-7 are valid
-	// values. All others indicate the COG is not started.
-	//
+{
     return m_par.cog;
 }
 
 int I2C::GetStatus()
-{	// Return the status value from the last I2C bus transaction.
-	//
+{
     return m_par.mailbox.sts;
 }
 
 
-
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Public Members - Transmit Functions
-//
-
 int I2C::DevPresent(uint8_t addr)
-{	// Write out the device write address to the bus with no register and
-	// no data bytes.  If there is an ACK we know the device is present
-	// on the bus.  If no ACK then it may not be present or may be busy.
-	//
-	//     [addr] - 7 bit I2C address
-	//
+{
     if(m_ready)
     {
     	WaitForIdle();
@@ -114,44 +105,30 @@ int I2C::DevPresent(uint8_t addr)
         return 0;
 }
 
-int I2C::TXByte(uint8_t addr, uint8_t &bt)
-{	// Transmit a single byte of data to the bus.  No register address.
-	// Transaction is |ST|WRADR|BYTE|SP|.
-	//
-	//    [addr] - 7 bit I2C address   	 		[bt] - Byte of data to transmit
-	//
-    return TXByte(addr, 0, 0, bt);
+
+int I2C::txByte(uint8_t bt)
+{
+    return txByte(-1, bt);
 }
 
-int I2C::TXByte(uint8_t addr, uint16_t reg, uint8_t rcnt, uint8_t bt)
-{	// Transmite a single byte of data to the bus at the register value
-	// specified.  Transaction is |ST|WRADR|REGVAL|BYTE|SP|.
-	//
-	//     [addr] - 7 bit I2C address    		[reg] - Register value to transmit
-	//	   [rcnt] - 1|2 register byte count 	[bt]  - Byte of data to transmit
-	//
+
+int I2C::txByte(int32_t reg, uint8_t bt)
+{
     if(m_ready)
-    	return TXBuf(addr, &bt, 1, reg, rcnt);
+    	return tx(reg, &bt, 1);
     else
         return -1;
 }
 
- int I2C::TXWord(uint8_t addr, uint16_t &wd)
- {	// Transmit a single word of data to the bus
-	// Transaction is |ST|WRADR|BYTE1|BYTE0|SP|.
-	//
-	//     [addr] - 7 bit I2C address			[wd] - Word of data to transmit
-	//
-	return TXWord(addr, 0, 0, wd);
+
+int I2C::txWord(uint16_t wd)
+{
+	return txWord(-1, wd);
 }
 
-int I2C::TXWord(uint8_t addr, uint16_t reg, uint8_t rcnt, uint16_t wd)
-{	// Transmit a single word of data to the bus at the register value
-	// specified.  Transaction is |ST|WRADR|REGVAL|BYTE1|BYTE0|SP|.
-	//
-	//     [addr] - 7 bit I2C address    		[reg] - Register value to transmit
-	//	   [rcnt] - 1|2 register byte count 	[wd]  - Word of data to transmit
-	//
+
+int I2C::txWord(int32_t reg, uint16_t wd)
+{
     uint8_t  bytes[2];
     
     bytes[1] = wd;
@@ -159,12 +136,14 @@ int I2C::TXWord(uint8_t addr, uint16_t reg, uint8_t rcnt, uint16_t wd)
     bytes[0] = wd;  
 
     if(m_ready)
-    	return TXBuf(addr, bytes, 2, reg, rcnt);
+    	return tx(reg, bytes, 2);
     else
         return -1;
 }
 
- int I2C::TXLong(uint8_t addr, uint32_t &lg)
+
+/*
+int I2C::txLong(uint8_t addr, uint32_t& lg)
 {	// Transmit a single long of data to the bus at the register value
 	// specified.  Transaction is |ST|WRADR|BYTE3|BYTE2|BYTE1|BYTE0|SP|.
 	//
@@ -173,7 +152,7 @@ int I2C::TXWord(uint8_t addr, uint16_t reg, uint8_t rcnt, uint16_t wd)
     return TXLong(addr, 0, 0, lg);
 }
 
-int I2C::TXLong(uint8_t addr, uint16_t reg, uint8_t rcnt, uint32_t lg)
+int I2C::txLong(int32_t reg, uint8_t rcnt, uint32_t lg)
 {	// Transmit a single long of data to the bus at the register value
 	// specified.  Transaction is |ST|WRADR|REGVAL|BYTE3|BYTE2|BYTE1|BYTE0|SP|.
 	//
@@ -191,31 +170,24 @@ int I2C::TXLong(uint8_t addr, uint16_t reg, uint8_t rcnt, uint32_t lg)
     	return TXBuf(addr, bytes, 4, reg, rcnt);
     else
         return -1;
+}*/
+
+int I2C::tx(uint8_t *buf, int count)
+{
+    return tx(-1, buf, count);
 }
 
-int I2C::TXBuf(uint8_t addr, uint8_t *buf, uint8_t count)
-{	// Transmit the bytes contained in the buffer to the bus.  No register value is used.
-	// Transaction is |ST|WRADR|BUF[0]|...|BUF[CNT-1]|SP|.
-	//
-	//	  [addr] - 7 bit I2C address			[buf] - pointer to the buffer to be used.
-	//	  [count] - Number of bytes to TX
-	//
-    return TXBuf(addr, buf, count, 0, 0);
-}
 
-int I2C::TXBuf(uint8_t addr, uint8_t *buf, uint8_t count, uint16_t reg, uint8_t rcnt=1)
-{	// Transmit the bytes contained in the buffer to the bus at the specified register value.
-	// Transaction is |ST|WRADR|REGVAL|BUF[0]|...|BUF[CNT-1]|SP|.
-	//
-	//	  [addr] - 7 bit I2C address			[buf] - pointer to the buffer to be used.
-	//	  [count] - Number of bytes to TX		[reg] - Register value to write to
-	//	  [rcnt]  - 0|1|2 Register bytes
-	//
+int I2C::tx(int32_t reg, uint8_t *buf, int count)
+{
+    //TODO Determine rcnt by inspecting the reg variable
+    int rcnt;
+    
     if(m_ready)
     {
     	WaitForIdle();
         m_par.mailbox.cmd       = I2C_CMD_LOCKED;
-        m_par.mailbox.hdr       = (addr << 1);
+        m_par.mailbox.hdr       = (m_adr << 1);
         m_par.mailbox.buffer    = buf;
         m_par.mailbox.count     = count;
         m_par.mailbox.reg       = reg;
@@ -230,20 +202,14 @@ int I2C::TXBuf(uint8_t addr, uint8_t *buf, uint8_t count, uint16_t reg, uint8_t 
 }
 
 
-
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Public Members - Receive Functions
-//
-
-int I2C::RXByte(uint8_t addr)
+int8_t I2C::rxByte()
 {	// Read a single byte of data from the bus.  No register address.
   
-    return RXByte(addr, 0, 0);
+    return rxByte(-1);
 }
 
-int I2C::RXByte(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
+
+int8_t I2C::rxByte(int32_t reg)
 {	// Read a single byte of data from the bus at the register specified.
 	// Register can be 1 or 2 bytes [rcnt].
 	// Transaction is |ST|WRADR|REGVAL|RS|RDADR|BYTE|SP|.
@@ -252,7 +218,7 @@ int I2C::RXByte(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
 
     if(m_ready)
     {
-    	RXBuf(addr, &bt, 1, reg, rcnt);
+    	rx(reg, &bt, 1);
 
         if (m_par.mailbox.sts == I2C_OK)
             return bt;
@@ -264,12 +230,14 @@ int I2C::RXByte(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
     return -1;
 }
 
-int I2C::RXWord(uint8_t addr)
+
+int16_t I2C::rxWord()
 {
-    return RXWord(addr, 0, 0);
+    return rxWord(-1);
 }
 
-int I2C::RXWord(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
+
+int16_t I2C::rxWord(int32_t reg)
 {// Read a single word of data from the bus at the register specified.  
  // Register can be 1 or 2 bytes -> [rcnt].  Default is 1 byte. 
  // Transaction is |ST|WRADR|REGVAL|RS|RDADR|BYTE1|BYTE0|SP|.
@@ -279,7 +247,7 @@ int I2C::RXWord(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
 
     if(m_ready)
     {
-    	RXBuf(addr, bytes, 2, reg, rcnt);
+    	rx(reg, bytes, 2);
 
         if (m_par.mailbox.sts == I2C_OK)
         {
@@ -296,10 +264,12 @@ int I2C::RXWord(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
     return -1;
 }
 
-int I2C::RXLong(uint8_t addr)
+
+/*int I2C::RXLong(uint8_t addr)
 {
     return RXLong(addr, 0, 0);
 }
+
 
 int I2C::RXLong(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
 {// Read a single long of data from the bus at the register specified.  
@@ -330,20 +300,25 @@ int I2C::RXLong(uint8_t addr, uint16_t reg, uint8_t rcnt=1)
     }
 
     return -1;
+}*/
+
+
+int I2C::rx(uint8_t* bytes, int count)
+{
+    return rx(-1, bytes, count);
 }
 
-int I2C::RXBuf(uint8_t addr, uint8_t *buf, uint8_t count)
-{
-    return RXBuf(addr, buf, count, 0, 0);
-}
 
-int I2C::RXBuf(uint8_t addr, uint8_t *buf, uint8_t count, uint16_t reg, uint8_t rcnt=1)
+int I2C::rx(int32_t reg, uint8_t *buf, int count)
 {
+    //TODO Determine rcnt by inspecting the reg variable
+    int rcnt;
+    
     if(m_ready)
     {
     	WaitForIdle();
         m_par.mailbox.cmd       = I2C_CMD_LOCKED;
-        m_par.mailbox.hdr       = (addr << 1);
+        m_par.mailbox.hdr       = (m_adr << 1);
         m_par.mailbox.buffer    = buf;
         m_par.mailbox.count     = count;
         m_par.mailbox.reg       = reg;
@@ -374,15 +349,24 @@ void I2C::WaitForIdle()
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////
-// Copyright (c) 2012 David Michael Betz
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy of this software
-// and associated documentation files (the "Software"), to deal in the Software without restriction,
-// including without limitation the rights to use, copy, modify, merge, publish, distribute,
-// sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all copies or
-//substantial portions of the Software.
-///////////////////////////////////////////////////////////////////////////////////////////////////
+/*
+ Copyright (C) 2013 Kyle Crane
+ 
+ Permission is hereby granted, free of charge, to any person obtaining a copy of
+ this software and associated documentation files (the "Software"), to deal in
+ the Software without restriction, including without limitation the rights to
+ use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ of the Software, and to permit persons to whom the Software is furnished to do
+ so, subject to the following conditions:
+ 
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ 
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+ */
