@@ -33,7 +33,7 @@ public:
     
     
     // Optional overrides
-    virtual int DevPresent() {return ERR_I2C_NOT_IMPL;};
+    virtual int devPresent() {return ERR_I2C_NOT_IMPL;};
     
     virtual int tx(int32_t reg, uint8_t* bytes, int count) {return ERR_I2C_NOT_IMPL;};
     virtual int txByte(uint8_t bt) {return ERR_I2C_NOT_IMPL;};

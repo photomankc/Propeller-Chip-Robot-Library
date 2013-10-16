@@ -21,9 +21,10 @@ public:
     int rx(uint8_t* bytes, int count);
     
     
-    int DevPresent(uint8_t addr);
-    int GetCog();
-    int GetStatus();
+    int devPresent(uint8_t addr);
+    int getCog();
+    int getStatus();
+    int getRegByteCount(int32_t);
     
     int tx(int32_t reg, uint8_t* bytes, int count);
     int txByte(uint8_t bt);

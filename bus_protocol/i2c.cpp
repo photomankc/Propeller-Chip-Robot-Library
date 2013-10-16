@@ -77,18 +77,18 @@ int I2C::isReady()
         return 0;
 }
 
-int I2C::GetCog()
+int I2C::getCog()
 {
     return m_par.cog;
 }
 
-int I2C::GetStatus()
+int I2C::getStatus()
 {
     return m_par.mailbox.sts;
 }
 
 
-int I2C::DevPresent(uint8_t addr)
+int I2C::devPresent(uint8_t addr)
 {
     if(m_ready)
     {
@@ -180,8 +180,7 @@ int I2C::tx(uint8_t *buf, int count)
 
 int I2C::tx(int32_t reg, uint8_t *buf, int count)
 {
-    //TODO Determine rcnt by inspecting the reg variable
-    int rcnt;
+    int rcnt = getRegByteCount(reg);
     
     if(m_ready)
     {
@@ -311,8 +310,7 @@ int I2C::rx(uint8_t* bytes, int count)
 
 int I2C::rx(int32_t reg, uint8_t *buf, int count)
 {
-    //TODO Determine rcnt by inspecting the reg variable
-    int rcnt;
+    int rcnt = getRegByteCount(reg);
     
     if(m_ready)
     {
@@ -344,6 +342,22 @@ void I2C::WaitForIdle()
 {
 	while (m_par.mailbox.cmd != I2C_CMD_IDLE)
 		usleep(30);
+}
+
+
+int I2C::getRegByteCount(int32_t reg)
+{
+    if (reg < 0)
+        return 0;
+    
+    if (reg > 0xFFFFFF)
+        return 4;
+    if (reg > 0xFFFF)
+        return 3;
+    if (reg > 0xFF)
+        return 2;
+    
+    return 1;
 }
 
 
